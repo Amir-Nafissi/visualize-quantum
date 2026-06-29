@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { motion } from "framer-motion";
 import { MousePointer2, Plus, Spline, Trash2, Shuffle } from "lucide-react";
@@ -9,6 +9,7 @@ import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { useGraphColoringStore } from "./store";
+import { useRunAnimation } from "./useRunAnimation";
 import { conflictingEdges, edgeKey, maxEdges } from "./lib";
 import type { CanvasMode } from "./ForceGraphCanvas";
 
@@ -41,7 +42,10 @@ export function GraphBuilder() {
     numNodes,
     numEdges,
     graph,
+    colors,
     result,
+    runPhase,
+    setRunPhase,
     setNumNodes,
     setNumEdges,
     regenerate,
@@ -55,14 +59,32 @@ export function GraphBuilder() {
 
   const edgeCap = maxEdges(numNodes);
 
+  const handleSettled = useCallback(
+    () => setRunPhase("revealed"),
+    [setRunPhase]
+  );
+
+  const { colorIndexRef } = useRunAnimation({
+    nodes: graph.nodes,
+    numColors: result?.num_colors ?? colors,
+    runPhase,
+    finalColoring: result?.coloring ?? null,
+    energyHistory: result?.energy_history ?? null,
+    onSettled: handleSettled,
+  });
+
+  const animating = runPhase === "superposition" || runPhase === "settling";
+
+  // Only flag conflicting edges in red once the final coloring is revealed —
+  // no red flicker mid-animation.
   const conflicts = useMemo(() => {
-    if (!result) return new Set<string>();
+    if (!result || runPhase !== "revealed") return new Set<string>();
     return new Set(
       conflictingEdges(graph.edges, result.coloring).map((e) =>
         edgeKey(e.source, e.target)
       )
     );
-  }, [result, graph.edges]);
+  }, [result, runPhase, graph.edges]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -139,9 +161,21 @@ export function GraphBuilder() {
               );
             })}
           </div>
-          <span className="hidden text-xs text-muted-foreground/70 sm:block">
-            {MODE_HINTS[mode]}
-          </span>
+          {animating ? (
+            <span className="flex items-center gap-1.5 text-xs font-medium text-primary">
+              <span className="relative flex size-2">
+                <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-75" />
+                <span className="relative inline-flex size-2 rounded-full bg-primary" />
+              </span>
+              {runPhase === "superposition"
+                ? "Superposition…"
+                : "Collapsing wavefunction…"}
+            </span>
+          ) : (
+            <span className="hidden text-xs text-muted-foreground/70 sm:block">
+              {MODE_HINTS[mode]}
+            </span>
+          )}
         </div>
 
         <motion.div
@@ -164,6 +198,8 @@ export function GraphBuilder() {
             onConnect={addEdge}
             onDeleteNode={removeNode}
             onDeleteEdge={removeEdge}
+            colorIndexRef={colorIndexRef}
+            continuousRedraw={animating}
           />
         </motion.div>
       </div>

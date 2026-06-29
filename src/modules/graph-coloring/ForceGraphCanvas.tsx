@@ -31,6 +31,10 @@ interface ForceGraphCanvasProps {
   onConnect: (a: number, b: number) => void;
   onDeleteNode: (id: number) => void;
   onDeleteEdge: (a: number, b: number) => void;
+  /** Per-frame color override (node id -> color index) during run animation. */
+  colorIndexRef?: React.MutableRefObject<Map<number, number> | null>;
+  /** Keep the canvas redrawing every frame so the color override animates. */
+  continuousRedraw?: boolean;
 }
 
 const CONNECT_RADIUS = 16; // graph-space distance to snap a drag to a node
@@ -52,6 +56,8 @@ export default function ForceGraphCanvas({
   onConnect,
   onDeleteNode,
   onDeleteEdge,
+  colorIndexRef,
+  continuousRedraw = false,
 }: ForceGraphCanvasProps) {
   const fgRef = useRef<ForceGraphMethods<FGNode, FGLink> | undefined>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -117,12 +123,17 @@ export default function ForceGraphCanvas({
 
   const colorForNode = useCallback(
     (id: number): string => {
+      // During a run, the animation override (a ref mutated each frame) wins.
+      const animIndex = colorIndexRef?.current?.get(id);
+      if (animIndex !== undefined) {
+        return COLOR_PALETTE[animIndex % COLOR_PALETTE.length];
+      }
       if (coloring && coloring[id] !== undefined) {
         return COLOR_PALETTE[coloring[id] % COLOR_PALETTE.length];
       }
       return UNCOLORED;
     },
-    [coloring]
+    [coloring, colorIndexRef]
   );
 
   const handleNodeClick = useCallback(
@@ -256,6 +267,7 @@ export default function ForceGraphCanvas({
         graphData={graphData}
         backgroundColor="rgba(0,0,0,0)"
         nodeRelSize={6}
+        autoPauseRedraw={!continuousRedraw}
         nodeCanvasObject={paintNode}
         nodePointerAreaPaint={(node, color, ctx) => {
           ctx.beginPath();

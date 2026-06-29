@@ -31,12 +31,14 @@ export function ConfigPanel() {
     ibmToken,
     saveToken,
     status,
+    runPhase,
     setColors,
     setP,
     setTarget,
     setIbmToken,
     setSaveToken,
     setStatus,
+    setRunPhase,
     setResult,
     setError,
   } = useGraphColoringStore();
@@ -51,7 +53,11 @@ export function ConfigPanel() {
   }, [setIbmToken, setSaveToken]);
 
   const qubits = graph.nodes.length * colors;
-  const running = status === "running";
+  // Busy while the request is in flight *or* the run animation is playing.
+  const running =
+    status === "running" ||
+    runPhase === "superposition" ||
+    runPhase === "settling";
 
   async function handleRun() {
     if (graph.nodes.length < 2) {
@@ -73,6 +79,8 @@ export function ConfigPanel() {
     }
 
     setStatus("running");
+    setRunPhase("superposition"); // start the cinematic animation immediately
+    setResult(null);
     setError(null);
     const toastId = toast.loading(
       target === "ibm"
@@ -104,6 +112,9 @@ export function ConfigPanel() {
       const data = (await res.json()) as QaoaResult;
       setResult(data);
       setStatus("done");
+      // Hand off to the energy-driven settle animation; charts reveal when it
+      // finishes (GraphBuilder -> setRunPhase("revealed")).
+      setRunPhase("settling");
 
       const conflicts = conflictingEdges(graph.edges, data.coloring);
       if (data.fallback) {
@@ -125,6 +136,7 @@ export function ConfigPanel() {
         err instanceof Error ? err.message : "Unknown error during execution.";
       setError(message);
       setStatus("error");
+      setRunPhase("idle");
       toast.error(message, { id: toastId });
     }
   }

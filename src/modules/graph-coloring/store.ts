@@ -12,6 +12,14 @@ import {
 export type ExecutionTarget = "local" | "ibm";
 export type RunStatus = "idle" | "running" | "done" | "error";
 
+/**
+ * Drives the cinematic run animation, independent of the network `status`:
+ *  - "superposition": Run clicked, rapid random color cycling while the API runs.
+ *  - "settling": result arrived, replaying the energy-driven collapse.
+ *  - "revealed": animation finished, final coloring + charts shown.
+ */
+export type RunPhase = "idle" | "superposition" | "settling" | "revealed";
+
 /** One probability entry for a measured bitstring. */
 export interface BitstringProb {
   bits: string;
@@ -46,6 +54,7 @@ interface GraphColoringState {
 
   // Execution state
   status: RunStatus;
+  runPhase: RunPhase;
   result: QaoaResult | null;
   error: string | null;
 
@@ -66,6 +75,7 @@ interface GraphColoringState {
   setSaveToken: (save: boolean) => void;
 
   setStatus: (s: RunStatus) => void;
+  setRunPhase: (p: RunPhase) => void;
   setResult: (r: QaoaResult | null) => void;
   setError: (e: string | null) => void;
   reset: () => void;
@@ -86,6 +96,7 @@ export const useGraphColoringStore = create<GraphColoringState>((set, get) => ({
   saveToken: false,
 
   status: "idle",
+  runPhase: "idle",
   result: null,
   error: null,
 
@@ -106,11 +117,12 @@ export const useGraphColoringStore = create<GraphColoringState>((set, get) => ({
       // A fresh graph invalidates any previous result.
       result: null,
       status: "idle",
+      runPhase: "idle",
       error: null,
     })),
 
   setGraph: (graph) =>
-    set({ graph, result: null, status: "idle", error: null }),
+    set({ graph, result: null, status: "idle", runPhase: "idle", error: null }),
 
   addNode: () => {
     const { graph } = get();
@@ -122,6 +134,7 @@ export const useGraphColoringStore = create<GraphColoringState>((set, get) => ({
       numNodes: graph.nodes.length + 1,
       result: null,
       status: "idle",
+      runPhase: "idle",
     });
     return nextId;
   },
@@ -141,6 +154,7 @@ export const useGraphColoringStore = create<GraphColoringState>((set, get) => ({
         numEdges: edges.length,
         result: null,
         status: "idle",
+        runPhase: "idle",
       };
     }),
 
@@ -156,6 +170,7 @@ export const useGraphColoringStore = create<GraphColoringState>((set, get) => ({
         numEdges: edges.length,
         result: null,
         status: "idle",
+        runPhase: "idle",
       };
     }),
 
@@ -173,17 +188,20 @@ export const useGraphColoringStore = create<GraphColoringState>((set, get) => ({
         numEdges: edges.length,
         result: null,
         status: "idle",
+        runPhase: "idle",
       };
     }),
 
-  setColors: (c) => set({ colors: c, result: null }),
+  setColors: (c) => set({ colors: c, result: null, runPhase: "idle" }),
   setP: (p) => set({ p }),
   setTarget: (t) => set({ target: t }),
   setIbmToken: (ibmToken) => set({ ibmToken }),
   setSaveToken: (saveToken) => set({ saveToken }),
 
   setStatus: (status) => set({ status }),
+  setRunPhase: (runPhase) => set({ runPhase }),
   setResult: (result) => set({ result }),
   setError: (error) => set({ error }),
-  reset: () => set({ status: "idle", result: null, error: null }),
+  reset: () =>
+    set({ status: "idle", runPhase: "idle", result: null, error: null }),
 }));

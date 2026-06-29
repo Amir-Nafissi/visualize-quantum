@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { Activity, BarChart3, CheckCircle2, Sparkles, TriangleAlert } from "lucide-react";
+import { Activity, Atom, BarChart3, CheckCircle2, Sparkles, TriangleAlert } from "lucide-react";
 import { EnergyChart } from "@/components/visualizers/EnergyChart";
 import { ProbabilityBars } from "@/components/visualizers/ProbabilityBars";
 import { formatPercent } from "@/lib/utils";
@@ -9,19 +9,12 @@ import { useGraphColoringStore } from "./store";
 import { COLOR_PALETTE, conflictingEdges } from "./lib";
 
 export function Visualizer() {
-  const { graph, result, status } = useGraphColoringStore();
+  const { graph, result, runPhase } = useGraphColoringStore();
 
-  if (status === "idle" && !result) {
-    return <EmptyState />;
-  }
-
-  if (status === "running" && !result) {
-    return (
-      <div className="flex h-full min-h-[400px] flex-col items-center justify-center gap-3 text-muted-foreground">
-        <Sparkles className="size-6 animate-pulse text-primary" />
-        <p className="text-sm">Optimizing QAOA circuit…</p>
-      </div>
-    );
+  // While the run animation plays, keep the charts hidden behind a themed
+  // placeholder so nothing reveals before the graph locks onto its colors.
+  if (runPhase === "superposition" || runPhase === "settling") {
+    return <CollapsingState phase={runPhase} />;
   }
 
   if (!result) {
@@ -145,6 +138,42 @@ function EmptyState() {
         <p className="max-w-xs text-sm text-muted-foreground">
           Build or generate a graph, then run QAOA to see the coloring, energy
           convergence, and measurement probabilities.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function CollapsingState({
+  phase,
+}: {
+  phase: "superposition" | "settling";
+}) {
+  return (
+    <div className="flex h-full min-h-[400px] flex-col items-center justify-center gap-4 rounded-xl border border-border bg-card/40 text-center">
+      <div className="relative flex size-16 items-center justify-center">
+        <motion.span
+          className="absolute inset-0 rounded-full border border-primary/40"
+          animate={{ scale: [1, 1.4, 1], opacity: [0.6, 0, 0.6] }}
+          transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+        />
+        <motion.div
+          animate={{ rotate: 360 }}
+          transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+        >
+          <Atom className="size-7 text-primary" />
+        </motion.div>
+      </div>
+      <div>
+        <p className="text-sm font-medium">
+          {phase === "superposition"
+            ? "Exploring superposition…"
+            : "Collapsing the wavefunction…"}
+        </p>
+        <p className="max-w-xs text-sm text-muted-foreground">
+          {phase === "superposition"
+            ? "QAOA is optimizing the circuit — watch the nodes flicker through every coloring."
+            : "Energy is converging; the nodes are settling onto the final coloring. Results appear once they lock."}
         </p>
       </div>
     </div>
