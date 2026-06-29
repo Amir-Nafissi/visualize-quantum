@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/**/*.py": {
+    "src/app/api/quantum/execute/route.ts": {
       "memory": 1024,
       "maxDuration": 60
     }

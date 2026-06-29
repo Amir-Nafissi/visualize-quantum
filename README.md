@@ -70,10 +70,10 @@ Validated end-to-end: a triangle is properly 3-colored (0 conflicts) but never
 
 ## Local development
 
-The Qiskit code is a **Vercel Python serverless function** at
-`api/quantum/execute.py` (Next.js App Router cannot host Python, so it lives in
-Vercel's native `/api` directory). `vercel dev` runs Next.js *and* the Python
-function together, matching production.
+The Qiskit logic lives in `python/execute.py`. A Next.js route handler
+(`src/app/api/quantum/execute/route.ts`) owns the `/api/quantum/execute`
+endpoint and, in development, runs that script through your local Python venv —
+so **plain `npm run dev` works**, no `vercel dev` required.
 
 ```bash
 # 1. JS deps
@@ -85,13 +85,13 @@ python -m venv .venv
 # source .venv/bin/activate     # macOS/Linux
 pip install -r requirements.txt
 
-# 3. Run both Next.js + the Python function
-npm i -g vercel
-vercel dev                      # http://localhost:3000
+# 3. Run the app
+npm run dev                     # http://localhost:3000
 ```
 
-> Plain `next dev` runs the UI but **not** the Python function — use `vercel dev`
-> (or deploy) to exercise the `/api/quantum/execute` route.
+The route finds the interpreter automatically (`.venv/Scripts/python.exe` on
+Windows, `.venv/bin/python` elsewhere); override it with the `PYTHON_BIN`
+environment variable if your Python lives somewhere else.
 
 Then open the dashboard → **Graph Coloring**:
 
@@ -111,7 +111,12 @@ toast), so the app never hard-fails on a quantum job.
 
 ## Deployment notes
 
-- `vercel.json` configures the Python function (`memory`, `maxDuration`).
+- The Node route runs Qiskit by spawning local Python, which works in dev and in
+  any Node host that has Python + the requirements available. On Vercel's managed
+  Node runtime (no Python), set **`QUANTUM_API_URL`** to a deployed Python
+  service and the route proxies requests to it; `python/execute.py` also exposes
+  a Vercel-style `handler`, so it can be deployed as a standalone Python function.
+- `vercel.json` sets the route's `memory` / `maxDuration`.
 - `requirements.txt` pins the **qiskit 1.x** line (QAOA uses the V1 primitives
   removed in qiskit 2.0). `qiskit-aer` is intentionally omitted — the local path
   uses the exact statevector `Sampler`, and dropping Aer keeps the bundle under

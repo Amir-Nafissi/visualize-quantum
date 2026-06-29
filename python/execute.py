@@ -322,3 +322,28 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self._send(200, {"status": "ok", "service": "qaoa-graph-coloring"})
+
+
+# --------------------------------------------------------------------------- #
+# CLI entrypoint — used by the Next.js dev route (src/app/api/quantum/execute).
+# Reads a JSON request body on stdin and writes {"status", "body"} on stdout.
+# Qiskit's deprecation chatter goes to stderr, so stdout stays clean JSON.
+# --------------------------------------------------------------------------- #
+def _main():
+    import sys
+
+    raw = sys.stdin.read() or "{}"
+    try:
+        payload = json.loads(raw)
+        status, body = execute(payload)
+    except Exception as exc:  # noqa: BLE001
+        status, body = 500, {
+            "error": f"Execution failed: {exc}",
+            "trace": traceback.format_exc(),
+        }
+    sys.stdout.write(json.dumps({"status": status, "body": body}))
+    sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    _main()
