@@ -1,0 +1,12 @@
+# Pinned to the qiskit 1.x line: qiskit-algorithms' QAOA uses the V1 primitives
+# (qiskit.primitives.Sampler), which were removed in qiskit 2.0.
+#
+# Note: qiskit-aer is intentionally omitted. The local path uses the exact
+# statevector Sampler (qiskit.primitives.Sampler), and Aer is the single
+# heaviest dependency — dropping it keeps the serverless bundle under Vercel's
+# ~250 MB unzipped limit. Add `qiskit-aer==0.15.1` locally if you want the
+# shot-based AerSimulator.
+qiskit==1.4.2
+qiskit-algorithms==0.3.1
+qiskit-optimization==0.6.1
+qiskit-ibm-runtime==0.29.0
