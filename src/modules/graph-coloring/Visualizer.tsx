@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Activity, BarChart3, CheckCircle2, Sparkles, TriangleAlert } from "lucide-react";
 import { EnergyChart } from "@/components/visualizers/EnergyChart";
 import { ProbabilityBars } from "@/components/visualizers/ProbabilityBars";
+import { formatPercent } from "@/lib/utils";
 import { useGraphColoringStore } from "./store";
 import { COLOR_PALETTE, conflictingEdges } from "./lib";
 
@@ -30,6 +31,9 @@ export function Visualizer() {
   const conflicts = conflictingEdges(graph.edges, result.coloring);
   const isProper = conflicts.length === 0;
   const usedColors = new Set(Object.values(result.coloring));
+  // The headline probability is the single most-probable measured bitstring —
+  // i.e. the tallest bar in the chart, so the two always agree.
+  const topProb = result.top_bitstrings[0]?.prob ?? 0;
 
   return (
     <AnimatePresence mode="wait">
@@ -63,8 +67,7 @@ export function Visualizer() {
               {result.fallback
                 ? "Ran on local simulator (IBM fallback). "
                 : `Ran on ${result.backend ?? "local simulator"}. `}
-              Best-bitstring success probability{" "}
-              {(result.success_prob * 100).toFixed(1)}%.
+              Most-probable measured state: {formatPercent(topProb)}.
             </p>
           </div>
         </div>
@@ -73,10 +76,21 @@ export function Visualizer() {
         <div className="grid grid-cols-3 gap-3">
           <Stat label="Colors used" value={`${usedColors.size}/${result.num_colors}`} />
           <Stat label="Conflicts" value={String(conflicts.length)} />
-          <Stat
-            label="Success prob"
-            value={`${(result.success_prob * 100).toFixed(0)}%`}
-          />
+          <Stat label="Top state" value={formatPercent(topProb)} />
+        </div>
+
+        {/* Secondary: probability the run lands on *any* proper coloring. */}
+        <div className="text-xs text-muted-foreground">
+          Probability mass on proper colorings:{" "}
+          <span className="font-medium text-foreground">
+            {formatPercent(result.success_prob)}
+          </span>
+          {topProb > result.success_prob && (
+            <span className="text-muted-foreground/70">
+              {" "}
+              — QAOA&apos;s most likely state isn&apos;t always optimal at low p.
+            </span>
+          )}
         </div>
 
         {/* Color legend */}
@@ -108,9 +122,12 @@ export function Visualizer() {
         <ChartCard
           icon={<BarChart3 className="size-4 text-primary" />}
           title="Measurement probabilities"
-          subtitle="Top 5 measured bitstrings"
+          subtitle="Top 5 measured bitstrings (hover for the full string)"
         >
-          <ProbabilityBars data={result.top_bitstrings} />
+          <ProbabilityBars
+            data={result.top_bitstrings}
+            numColors={result.num_colors}
+          />
         </ChartCard>
       </motion.div>
     </AnimatePresence>

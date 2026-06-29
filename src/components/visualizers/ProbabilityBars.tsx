@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { formatPercent } from "@/lib/utils";
 
 interface BitstringProb {
   bits: string;
@@ -17,12 +18,53 @@ interface BitstringProb {
 }
 
 interface ProbabilityBarsProps {
-  /** Top measured bitstrings with their probabilities (already sorted). */
+  /** Top measured bitstrings with their probabilities (already sorted desc). */
   data: BitstringProb[];
+  /** Colors per node — used to group the bitstring into one-hot blocks. */
+  numColors?: number;
+}
+
+interface Row extends BitstringProb {
+  rank: string;
+  grouped: string;
+}
+
+/** Insert a space every `size` chars so the one-hot structure is readable. */
+function groupBits(bits: string, size: number): string {
+  if (!size || size < 1) return bits;
+  const parts: string[] = [];
+  for (let i = 0; i < bits.length; i += size) {
+    parts.push(bits.slice(i, i + size));
+  }
+  return parts.join(" ");
+}
+
+function ChartTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: Row }>;
+}) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0].payload;
+  return (
+    <div className="rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-md">
+      <div className="mb-1 font-mono text-[11px] tracking-wider text-foreground">
+        {row.grouped}
+      </div>
+      <div className="text-muted-foreground">
+        Probability{" "}
+        <span className="font-medium text-foreground">
+          {formatPercent(row.prob)}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 /** Bar chart of the most probable measured bitstrings. */
-export function ProbabilityBars({ data }: ProbabilityBarsProps) {
+export function ProbabilityBars({ data, numColors = 0 }: ProbabilityBarsProps) {
   if (data.length === 0) {
     return (
       <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
@@ -31,54 +73,45 @@ export function ProbabilityBars({ data }: ProbabilityBarsProps) {
     );
   }
 
-  const top = data.slice(0, 5);
+  const rows: Row[] = data.slice(0, 5).map((d, i) => ({
+    ...d,
+    rank: `#${i + 1}`,
+    grouped: groupBits(d.bits, numColors),
+  }));
 
   return (
     <ResponsiveContainer width="100%" height={220}>
-      <BarChart
-        data={top}
-        margin={{ top: 16, right: 12, bottom: 4, left: -8 }}
-      >
+      <BarChart data={rows} margin={{ top: 18, right: 12, bottom: 4, left: -4 }}>
         <XAxis
-          dataKey="bits"
+          dataKey="rank"
           stroke="#71717a"
-          fontSize={10}
+          fontSize={11}
           tickLine={false}
           axisLine={{ stroke: "#27272a" }}
           interval={0}
-          angle={top.length > 3 ? -20 : 0}
-          textAnchor={top.length > 3 ? "end" : "middle"}
-          height={top.length > 3 ? 44 : 24}
+          height={24}
         />
         <YAxis
           stroke="#71717a"
           fontSize={11}
           tickLine={false}
           axisLine={{ stroke: "#27272a" }}
-          width={48}
-          tickFormatter={(v: number) => `${Math.round(v * 100)}%`}
+          width={52}
+          domain={[0, "auto"]}
+          tickFormatter={(v: unknown) => formatPercent(Number(v))}
         />
         <Tooltip
           cursor={{ fill: "rgba(255,255,255,0.04)" }}
-          contentStyle={{
-            background: "#18181b",
-            border: "1px solid #27272a",
-            borderRadius: 8,
-            fontSize: 12,
-          }}
-          formatter={(value: unknown) => [
-            `${(Number(value) * 100).toFixed(1)}%`,
-            "Probability",
-          ]}
+          content={<ChartTooltip />}
         />
         <Bar dataKey="prob" radius={[4, 4, 0, 0]} isAnimationActive>
-          {top.map((entry, i) => (
+          {rows.map((entry, i) => (
             <Cell key={entry.bits} fill={i === 0 ? "#6366f1" : "#4f46e5"} />
           ))}
           <LabelList
             dataKey="prob"
             position="top"
-            formatter={(v: unknown) => `${Math.round(Number(v) * 100)}%`}
+            formatter={(v: unknown) => formatPercent(Number(v))}
             fontSize={10}
             fill="#a1a1aa"
           />
