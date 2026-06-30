@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { motion } from "framer-motion";
-import { MousePointer2, Plus, Spline, Trash2, Shuffle } from "lucide-react";
+import { Focus, MousePointer2, Plus, Spline, Trash2, Shuffle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
@@ -56,6 +56,8 @@ export function GraphBuilder() {
   } = useGraphColoringStore();
 
   const [mode, setMode] = useState<CanvasMode>("move");
+  // Set by the canvas; pans/zooms to fit the whole graph in view.
+  const centerRef = useRef<(() => void) | null>(null);
 
   const edgeCap = maxEdges(numNodes);
 
@@ -160,6 +162,15 @@ export function GraphBuilder() {
                 </button>
               );
             })}
+            <span className="mx-1 h-5 w-px bg-border" aria-hidden />
+            <button
+              onClick={() => centerRef.current?.()}
+              title="Fit the graph in view"
+              className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Focus className="size-3.5" />
+              Center
+            </button>
           </div>
           {animating ? (
             <span className="flex items-center gap-1.5 text-xs font-medium text-primary">
@@ -200,6 +211,7 @@ export function GraphBuilder() {
             onDeleteEdge={removeEdge}
             colorIndexRef={colorIndexRef}
             continuousRedraw={animating}
+            centerRef={centerRef}
           />
         </motion.div>
       </div>

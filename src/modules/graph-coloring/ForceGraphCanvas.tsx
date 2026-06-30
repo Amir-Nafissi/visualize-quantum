@@ -35,6 +35,8 @@ interface ForceGraphCanvasProps {
   colorIndexRef?: React.MutableRefObject<Map<number, number> | null>;
   /** Keep the canvas redrawing every frame so the color override animates. */
   continuousRedraw?: boolean;
+  /** Set to a function that pans/zooms to fit the whole graph in view. */
+  centerRef?: React.MutableRefObject<(() => void) | null>;
 }
 
 const CONNECT_RADIUS = 16; // graph-space distance to snap a drag to a node
@@ -58,6 +60,7 @@ export default function ForceGraphCanvas({
   onDeleteEdge,
   colorIndexRef,
   continuousRedraw = false,
+  centerRef,
 }: ForceGraphCanvasProps) {
   const fgRef = useRef<ForceGraphMethods<FGNode, FGLink> | undefined>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -85,6 +88,15 @@ export default function ForceGraphCanvas({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // Expose a "fit the whole graph in view" action to the parent toolbar.
+  useEffect(() => {
+    if (!centerRef) return;
+    centerRef.current = () => fgRef.current?.zoomToFit(400, 40);
+    return () => {
+      centerRef.current = null;
+    };
+  }, [centerRef]);
 
   // Reconcile store graph -> persistent FG graph data, preserving positions.
   // react-force-graph mutates node objects in place (x/y/vx/vy/fx/fy) and keys
