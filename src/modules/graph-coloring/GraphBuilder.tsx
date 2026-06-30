@@ -189,8 +189,10 @@ export function GraphBuilder() {
           )}
         </div>
 
+        {/* No key={mode} here: re-keying remounts ForceGraphCanvas and discards
+            its in-memory node positions, scattering the graph on every tool
+            switch. Keep it mounted; the cursor class still updates on re-render. */}
         <motion.div
-          key={mode}
           initial={{ opacity: 0.6 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.2 }}

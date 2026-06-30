@@ -116,8 +116,11 @@ export default function ForceGraphCanvas({
       if (!n) {
         n = { id };
         if (pendingSpawn.current) {
-          n.x = pendingSpawn.current.x;
-          n.y = pendingSpawn.current.y;
+          // Pin the node where the user clicked. Without fx/fy the force sim
+          // reheats and flings this still-edgeless node out of view; pinning
+          // keeps it exactly where it was placed (same as a dragged node).
+          n.x = n.fx = pendingSpawn.current.x;
+          n.y = n.fy = pendingSpawn.current.y;
           pendingSpawn.current = null;
         }
         map.set(id, n);
