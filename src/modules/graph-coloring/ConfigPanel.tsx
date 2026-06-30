@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
-import { AlertTriangle, Cpu, Loader2, Play, Radio } from "lucide-react";
+import { AlertTriangle, Cpu, Play, Radio, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
@@ -42,6 +42,10 @@ export function ConfigPanel() {
     setResult,
     setError,
   } = useGraphColoringStore();
+
+  // In-flight run bookkeeping so the Stop button can cancel it.
+  const abortRef = useRef<AbortController | null>(null);
+  const toastIdRef = useRef<string | number | null>(null);
 
   // Hydrate a previously saved IBM token from localStorage.
   useEffect(() => {
@@ -87,11 +91,14 @@ export function ConfigPanel() {
     setRunPhase("superposition"); // start the cinematic animation immediately
     setResult(null);
     setError(null);
+    const controller = new AbortController();
+    abortRef.current = controller;
     const toastId = toast.loading(
       target === "ibm"
         ? "Submitting QAOA job to IBM Quantum…"
         : "Running QAOA on the local simulator…"
     );
+    toastIdRef.current = toastId;
 
     try {
       const res = await fetch("/api/quantum/execute", {
@@ -104,6 +111,7 @@ export function ConfigPanel() {
           target,
           ibm_token: target === "ibm" ? ibmToken : "",
         }),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -137,12 +145,34 @@ export function ConfigPanel() {
         );
       }
     } catch (err) {
+      // A deliberate Stop aborts the fetch — handleStop already reset the UI.
+      if (err instanceof DOMException && err.name === "AbortError") return;
       const message =
         err instanceof Error ? err.message : "Unknown error during execution.";
       setError(message);
       setStatus("error");
       setRunPhase("idle");
       toast.error(message, { id: toastId });
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  }
+
+  // Cancel a run in progress. While the request is still in flight we abort it
+  // and return to idle; if the result already arrived (settle animation), we
+  // just skip the animation and reveal the result immediately.
+  function handleStop() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+
+    if (status === "running") {
+      setStatus("idle");
+      setRunPhase("idle");
+      setResult(null);
+      setError(null);
+      toast.info("Run stopped.", { id: toastIdRef.current ?? undefined });
+    } else {
+      setRunPhase("revealed");
     }
   }
 
@@ -271,24 +301,22 @@ export function ConfigPanel() {
         </motion.div>
       )}
 
-      <Button
-        onClick={handleRun}
-        disabled={running}
-        size="lg"
-        className="w-full gap-2"
-      >
-        {running ? (
-          <>
-            <Loader2 className="size-4 animate-spin" />
-            Running…
-          </>
-        ) : (
-          <>
-            <Play className="size-4" />
-            Run QAOA
-          </>
-        )}
-      </Button>
+      {running ? (
+        <Button
+          onClick={handleStop}
+          variant="destructive"
+          size="lg"
+          className="w-full gap-2"
+        >
+          <Square className="size-4 fill-current" />
+          Stop
+        </Button>
+      ) : (
+        <Button onClick={handleRun} size="lg" className="w-full gap-2">
+          <Play className="size-4" />
+          Run QAOA
+        </Button>
+      )}
     </div>
   );
 }
