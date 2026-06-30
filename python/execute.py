@@ -101,11 +101,18 @@ def decode_coloring(x, nodes, num_colors):
 # --------------------------------------------------------------------------- #
 # Result assembly (shared by every execution path)
 # --------------------------------------------------------------------------- #
-def build_result(samples, nodes, edges, num_colors, energy_history, backend, fallback):
+def build_result(
+    samples, nodes, edges, num_colors, energy_history, backend, fallback,
+    success_prob=None,
+):
     """
     samples: list of (x:list[float over variables], probability:float).
     Picks the best (fewest conflicts, then most probable) sample as the coloring
     and reports success probability + top-5 bitstrings.
+
+    `success_prob` (mass on optimal/proper colorings) is passed in when computed
+    over the *full* distribution (local path); otherwise it's estimated from the
+    provided samples (e.g. hardware shots).
     """
     n = len(nodes) * num_colors
 
@@ -125,9 +132,10 @@ def build_result(samples, nodes, edges, num_colors, energy_history, backend, fal
     coloring = decode_coloring(best[1], nodes, num_colors)
     best_conflicts = best[3]
 
-    # Success probability = mass on solutions with the minimum conflict count.
-    min_conf = min(t[3] for t in scored)
-    success_prob = sum(t[2] for t in scored if t[3] == min_conf)
+    if success_prob is None:
+        # Estimate from samples: mass on the minimum-conflict states present.
+        min_conf = min(t[3] for t in scored)
+        success_prob = sum(t[2] for t in scored if t[3] == min_conf)
 
     top = [{"bits": t[0], "prob": t[2]} for t in scored[:5]]
 
@@ -187,6 +195,13 @@ def qaoa_optimize(C, n, p):
     """
     Optimize a depth-p QAOA for the diagonal cost vector C with COBYLA.
     Returns (best_params, probabilities, energy_history).
+
+    The cost is normalized *inside the phase layer* so a gamma of O(1) produces a
+    meaningful rotation. We scale by the standard deviation of C (its typical
+    spread), NOT its max: the max comes from rare, highly-infeasible states and
+    using it makes the gamma search far too coarse for the states that actually
+    carry amplitude — which leaves the optimizer stuck near the mean cost.
+    Reported energies stay in true units.
     """
     from scipy.optimize import minimize
 
@@ -194,15 +209,19 @@ def qaoa_optimize(C, n, p):
     idx = np.arange(dim, dtype=np.int64)
     flips = [idx ^ (1 << j) for j in range(n)]  # X_j permutation per qubit
     psi0 = np.full(dim, 1.0 / np.sqrt(dim), dtype=np.complex128)
-    history: list[float] = []
+
+    # Normalized cost used only for the phase rotation (a global shift/scale of C
+    # is just a global phase, so probabilities and true energy are unchanged).
+    scale = float(C.std()) or 1.0
+    neg_i_cn = -1j * C / scale
 
     def statevector(params):
         gammas = params[:p]
         betas = params[p:]
         psi = psi0.copy()
         for layer in range(p):
-            # Diagonal cost layer (in-place).
-            psi *= np.exp(-1j * gammas[layer] * C)
+            # Diagonal cost layer (in-place) on the normalized cost.
+            psi *= np.exp(gammas[layer] * neg_i_cn)
             # Mixer: e^{-iβX_j} on each qubit, in-place to avoid temporaries.
             cb, sb = np.cos(betas[layer]), -1j * np.sin(betas[layer])
             for fj in flips:
@@ -212,20 +231,36 @@ def qaoa_optimize(C, n, p):
                 psi += flipped
         return psi
 
-    def objective(params):
-        psi = statevector(params)
-        energy = float(np.real(np.vdot(psi, C * psi)))
-        history.append(energy)
-        return energy
+    def make_objective(history):
+        def objective(params):
+            psi = statevector(params)
+            energy = float(np.real(np.vdot(psi, C * psi)))
+            history.append(energy)
+            return energy
+
+        return objective
 
     rng = np.random.default_rng(7)
-    x0 = rng.uniform(0.0, np.pi, size=2 * p)
-    res = minimize(
-        objective, x0, method="COBYLA",
-        options={"maxiter": _maxiter_for(n), "rhobeg": 0.6},
-    )
-    probs = np.abs(statevector(res.x)) ** 2
-    return res.x, probs, history
+    maxiter = _maxiter_for(n)
+    restarts = 5 if n <= 15 else 1
+
+    best_params, best_energy, best_history = None, np.inf, []
+    for _ in range(restarts):
+        # Standard QAOA ranges: gamma in [0, 2π), beta in [0, π).
+        x0 = np.concatenate([
+            rng.uniform(0.0, 2.0 * np.pi, size=p),
+            rng.uniform(0.0, np.pi, size=p),
+        ])
+        history: list[float] = []
+        res = minimize(
+            make_objective(history), x0, method="COBYLA",
+            options={"maxiter": maxiter, "rhobeg": 0.5},
+        )
+        if res.fun < best_energy:
+            best_energy, best_params, best_history = res.fun, res.x, history
+
+    probs = np.abs(statevector(best_params)) ** 2
+    return best_params, probs, best_history
 
 
 def collect_samples(probs, n, C):
@@ -242,13 +277,56 @@ def collect_samples(probs, n, C):
     return [([(s >> j) & 1 for j in range(n)], float(probs[s])) for s in order]
 
 
+def onehot_penalty(nodes, edges):
+    """
+    Tight one-hot penalty A = max_degree + 1. This is the smallest weight that
+    still makes a proper coloring the global optimum (any one-hot violation must
+    cost more than the edge conflicts it could remove). Using this instead of
+    QuadraticProgramToQubo's large auto-penalty keeps the cost landscape smooth,
+    which lets QAOA concentrate far more probability on proper colorings.
+    """
+    deg = {v: 0 for v in nodes}
+    for u, v in edges:
+        if u in deg:
+            deg[u] += 1
+        if v in deg:
+            deg[v] += 1
+    return (max(deg.values()) if deg else 1) + 1
+
+
+def proper_coloring_mass(probs, nodes, edges, num_colors):
+    """
+    Total probability, over the FULL distribution, of measuring a bitstring that
+    decodes to a proper coloring. Each node's color is the argmax over its color
+    bits — identical to `decode_coloring` — so this matches both the old behavior
+    and the coloring the UI actually displays.
+    """
+    dim = probs.shape[0]
+    idx = np.arange(dim, dtype=np.int64)
+    pos = {v: i for i, v in enumerate(nodes)}
+    node_color = np.empty((dim, len(nodes)), dtype=np.int64)
+    for vi in range(len(nodes)):
+        block = np.stack(
+            [((idx >> (vi * num_colors + c)) & 1) for c in range(num_colors)],
+            axis=1,
+        )
+        node_color[:, vi] = block.argmax(axis=1)
+
+    proper = np.ones(dim, dtype=bool)
+    for u, v in edges:
+        proper &= node_color[:, pos[u]] != node_color[:, pos[v]]
+    return float(probs[proper].sum())
+
+
 def run_local(qp, nodes, edges, num_colors, p):
     from qiskit_optimization.converters import QuadraticProgramToQubo
 
-    qubo = QuadraticProgramToQubo().convert(qp)
+    qubo = QuadraticProgramToQubo(penalty=onehot_penalty(nodes, edges)).convert(qp)
     C, n = build_cost_vector(qubo)
     _params, probs, energy_history = qaoa_optimize(C, n, p)
-    return collect_samples(probs, n, C), energy_history
+
+    optimal = proper_coloring_mass(probs, nodes, edges, num_colors)
+    return collect_samples(probs, n, C), energy_history, float(optimal)
 
 
 # --------------------------------------------------------------------------- #
@@ -300,7 +378,7 @@ def run_ibm(qp, nodes, edges, num_colors, p, token):
     n = len(nodes) * num_colors
     backend = service.least_busy(operational=True, simulator=False, min_num_qubits=n)
 
-    qubo = QuadraticProgramToQubo().convert(qp)
+    qubo = QuadraticProgramToQubo(penalty=onehot_penalty(nodes, edges)).convert(qp)
     C, n = build_cost_vector(qubo)
     operator, _offset = qubo.to_ising()
     params, _probs, energy_history = qaoa_optimize(C, n, p)
@@ -376,18 +454,20 @@ def execute(payload):
                 backend_name, fallback=False,
             )
         except Exception as exc:  # noqa: BLE001 - any failure => graceful fallback
-            samples, energy_history = run_local(qp, nodes, edges, num_colors, p)
+            samples, energy_history, optimal = run_local(
+                qp, nodes, edges, num_colors, p
+            )
             res = build_result(
                 samples, nodes, edges, num_colors, energy_history,
-                "local simulator", fallback=True,
+                "local simulator", fallback=True, success_prob=optimal,
             )
             res["note"] = f"IBM run unavailable ({exc}); used local simulator."
             return 200, res
 
-    samples, energy_history = run_local(qp, nodes, edges, num_colors, p)
+    samples, energy_history, optimal = run_local(qp, nodes, edges, num_colors, p)
     return 200, build_result(
         samples, nodes, edges, num_colors, energy_history,
-        "local simulator", fallback=False,
+        "local simulator", fallback=False, success_prob=optimal,
     )
 
 

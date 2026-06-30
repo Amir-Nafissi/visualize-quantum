@@ -127,5 +127,5 @@ toast), so the app never hard-fails on a quantum job.
   keeps the bundle well under Vercel's ~250 MB unzipped limit.
 - Keep graphs small: statevector simulation is exponential in `nodes × colors`,
   so the app caps circuits at **18 qubits** and surfaces a clear error beyond
-  that. Typical graphs (≤15 qubits) solve in ~1–2 s; the 18-qubit max takes
-  ~10–15 s.
+  that. Typical graphs (≤15 qubits) solve in ~3–6 s (several COBYLA restarts for
+  solution quality); the 18-qubit max takes ~5–8 s.
