@@ -111,16 +111,13 @@ export function Visualizer() {
           <EnergyChart history={result.energy_history} />
         </ChartCard>
 
-        {/* Measurement probabilities */}
+        {/* Solution quality distribution */}
         <ChartCard
           icon={<BarChart3 className="size-4 text-primary" />}
-          title="Measurement probabilities"
-          subtitle="Top 5 measured bitstrings (hover for the full string)"
+          title="Solution Quality Distribution"
+          subtitle="Probability of measuring a state with N conflicts"
         >
-          <ProbabilityBars
-            data={result.top_bitstrings}
-            numColors={result.num_colors}
-          />
+          <ProbabilityBars data={result.conflict_distribution} />
         </ChartCard>
       </motion.div>
     </AnimatePresence>

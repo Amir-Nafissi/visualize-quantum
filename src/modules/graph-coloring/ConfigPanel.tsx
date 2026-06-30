@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
-import { Cpu, Loader2, Play, Radio } from "lucide-react";
+import { AlertTriangle, Cpu, Loader2, Play, Radio } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { conflictingEdges } from "./lib";
+import { conflictingEdges, maxCliqueSize } from "./lib";
 import { useGraphColoringStore, type QaoaResult } from "./store";
 
 const TOKEN_KEY = "vq_ibm_token";
@@ -53,6 +53,11 @@ export function ConfigPanel() {
   }, [setIbmToken, setSaveToken]);
 
   const qubits = graph.nodes.length * colors;
+  // Lower bound on the colors any proper coloring needs (largest clique). If the
+  // user picks fewer, conflicts are mathematically unavoidable — e.g. a complete
+  // graph on n nodes has a clique of size n and so requires n colors.
+  const requiredColors = maxCliqueSize(graph);
+  const infeasible = colors < requiredColors;
   // Busy while the request is in flight *or* the run animation is playing.
   const running =
     status === "running" ||
@@ -247,6 +252,24 @@ export function ConfigPanel() {
         <span className="font-mono">{qubits}</span> qubits
         {qubits > QUBIT_CAP && ` — exceeds local cap of ${QUBIT_CAP}`}
       </div>
+
+      {/* Feasibility warning: chosen colors below the chromatic lower bound. */}
+      {infeasible && (
+        <motion.div
+          initial={{ opacity: 0, y: -4 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-500"
+        >
+          <AlertTriangle className="mt-px size-3.5 shrink-0" />
+          <span>
+            This graph needs at least{" "}
+            <span className="font-semibold">{requiredColors} colors</span> (it
+            contains a clique of {requiredColors} mutually connected nodes). With{" "}
+            {colors} color{colors === 1 ? "" : "s"}, some edges will always
+            conflict.
+          </span>
+        </motion.div>
+      )}
 
       <Button
         onClick={handleRun}

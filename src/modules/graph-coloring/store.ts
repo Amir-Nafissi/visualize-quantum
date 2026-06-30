@@ -26,12 +26,19 @@ export interface BitstringProb {
   prob: number;
 }
 
+/** Total probability mass of measuring a state with exactly `conflicts` edges. */
+export interface ConflictTier {
+  conflicts: number;
+  prob: number;
+}
+
 /** Shape returned by POST /api/quantum/execute. */
 export interface QaoaResult {
   coloring: Coloring;
   energy_history: number[];
   success_prob: number;
   top_bitstrings: BitstringProb[];
+  conflict_distribution: ConflictTier[];
   num_colors: number;
   fallback?: boolean;
   backend?: string;

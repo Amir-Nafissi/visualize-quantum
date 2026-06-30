@@ -23,6 +23,7 @@ token, queue longer than the serverless budget) falls back to the local result.
 
 from http.server import BaseHTTPRequestHandler
 import json
+import sys
 import time
 import traceback
 
@@ -103,7 +104,7 @@ def decode_coloring(x, nodes, num_colors):
 # --------------------------------------------------------------------------- #
 def build_result(
     samples, nodes, edges, num_colors, energy_history, backend, fallback,
-    success_prob=None,
+    success_prob=None, conflict_distribution=None,
 ):
     """
     samples: list of (x:list[float over variables], probability:float).
@@ -139,11 +140,33 @@ def build_result(
 
     top = [{"bits": t[0], "prob": t[2]} for t in scored[:5]]
 
+    # Probability mass grouped by conflict count. The local path computes this
+    # over the FULL distribution and passes it in; otherwise (hardware shots) we
+    # estimate it from the available samples.
+    if conflict_distribution is None:
+        agg = {}
+        for _bits, _x, prob, conf in scored:
+            agg[conf] = agg.get(conf, 0.0) + prob
+        conflict_distribution = [
+            {"conflicts": k, "prob": agg[k]} for k in sorted(agg)
+        ]
+
+    # Diagnostic: dump the exact top-5 (bits, prob, conflicts) to stderr. stdout
+    # stays clean JSON for the Node route; stderr is surfaced in the dev console.
+    # NOTE: for graph coloring the top states are usually *cost-degenerate*
+    # (every proper coloring has zero conflicts), so QAOA spreads near-equal
+    # probability over them — identical-height bars are expected, not a bug.
+    print("[execute] top bitstrings (bits | prob | conflicts):", file=sys.stderr)
+    for t in scored[:5]:
+        print(f"  {t[0]}  {t[2]:.6e}  conflicts={t[3]}", file=sys.stderr)
+    print(f"[execute] success_prob={float(success_prob):.6e}", file=sys.stderr)
+
     return {
         "coloring": {str(k): v for k, v in coloring.items()},
         "energy_history": energy_history,
         "success_prob": float(success_prob),
         "top_bitstrings": top,
+        "conflict_distribution": conflict_distribution,
         "num_colors": num_colors,
         "conflicts": int(best_conflicts),
         "backend": backend,
@@ -418,6 +441,49 @@ def proper_coloring_mass(probs, nodes, edges, num_colors):
     return float(probs[proper].sum())
 
 
+def conflict_tiers(node_color, probs, edges, pos):
+    """
+    Total probability mass grouped by conflict count, over the FULL distribution.
+    `node_color[s, vi]` is node vi's color in basis state s (argmax decode, same
+    as `decode_coloring`). Returns [{"conflicts": k, "prob": mass}, ...] sorted by
+    k ascending, including only tiers that carry non-negligible mass.
+    """
+    dim = probs.shape[0]
+    counts = np.zeros(dim, dtype=np.int64)
+    for u, v in edges:
+        counts += (node_color[:, pos[u]] == node_color[:, pos[v]]).astype(np.int64)
+
+    tiers = []
+    for k in range(int(counts.max()) + 1 if dim else 0):
+        mass = float(probs[counts == k].sum())
+        if mass > 1e-9:
+            tiers.append({"conflicts": k, "prob": mass})
+    return tiers
+
+
+def decode_distribution(probs, nodes, edges, num_colors):
+    """
+    Shared decode of the full statevector distribution: returns
+    (proper_mass, conflict_tiers) so we don't pay the per-state argmax twice.
+    """
+    dim = probs.shape[0]
+    idx = np.arange(dim, dtype=np.int64)
+    pos = {v: i for i, v in enumerate(nodes)}
+    node_color = np.empty((dim, len(nodes)), dtype=np.int64)
+    for vi in range(len(nodes)):
+        block = np.stack(
+            [((idx >> (vi * num_colors + c)) & 1) for c in range(num_colors)],
+            axis=1,
+        )
+        node_color[:, vi] = block.argmax(axis=1)
+
+    proper = np.ones(dim, dtype=bool)
+    for u, v in edges:
+        proper &= node_color[:, pos[u]] != node_color[:, pos[v]]
+    proper_mass = float(probs[proper].sum())
+    return proper_mass, conflict_tiers(node_color, probs, edges, pos)
+
+
 def run_local(qp, nodes, edges, num_colors, p):
     from qiskit_optimization.converters import QuadraticProgramToQubo
 
@@ -433,8 +499,8 @@ def run_local(qp, nodes, edges, num_colors, p):
         C, n, p, score=score if n <= 15 else None
     )
 
-    optimal = proper_coloring_mass(probs, nodes, edges, num_colors)
-    return collect_samples(probs, n, C), energy_history, float(optimal), restarts
+    optimal, tiers = decode_distribution(probs, nodes, edges, num_colors)
+    return collect_samples(probs, n, C), energy_history, float(optimal), restarts, tiers
 
 
 # --------------------------------------------------------------------------- #
@@ -562,23 +628,25 @@ def execute(payload):
                 backend_name, fallback=False,
             )
         except Exception as exc:  # noqa: BLE001 - any failure => graceful fallback
-            samples, energy_history, optimal, restarts = run_local(
+            samples, energy_history, optimal, restarts, tiers = run_local(
                 qp, nodes, edges, num_colors, p
             )
             res = build_result(
                 samples, nodes, edges, num_colors, energy_history,
                 "local simulator", fallback=True, success_prob=optimal,
+                conflict_distribution=tiers,
             )
             res["energy_by_depth"] = restarts
             res["note"] = f"IBM run unavailable ({exc}); used local simulator."
             return 200, res
 
-    samples, energy_history, optimal, restarts = run_local(
+    samples, energy_history, optimal, restarts, tiers = run_local(
         qp, nodes, edges, num_colors, p
     )
     res = build_result(
         samples, nodes, edges, num_colors, energy_history,
         "local simulator", fallback=False, success_prob=optimal,
+        conflict_distribution=tiers,
     )
     res["energy_by_depth"] = restarts
     return 200, res
