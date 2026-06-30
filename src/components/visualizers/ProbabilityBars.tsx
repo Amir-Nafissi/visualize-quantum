@@ -74,15 +74,23 @@ export function ProbabilityBars({ data }: ProbabilityBarsProps) {
 
   return (
     <ResponsiveContainer width="100%" height={220}>
-      <BarChart data={rows} margin={{ top: 18, right: 12, bottom: 4, left: -4 }}>
+      <BarChart data={rows} margin={{ top: 18, right: 12, bottom: 6, left: -4 }}>
         <XAxis
-          dataKey="label"
+          dataKey="conflicts"
           stroke="#71717a"
           fontSize={11}
           tickLine={false}
           axisLine={{ stroke: "#27272a" }}
           interval={0}
-          height={24}
+          height={40}
+          tickFormatter={(v: unknown) => String(v)}
+          label={{
+            value: "Number of conflicts",
+            position: "insideBottom",
+            offset: 0,
+            fontSize: 11,
+            fill: "#71717a",
+          }}
         />
         <YAxis
           stroke="#71717a"
