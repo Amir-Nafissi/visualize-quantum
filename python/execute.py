@@ -191,76 +191,176 @@ def build_cost_vector(qubo):
     return C, n
 
 
-def qaoa_optimize(C, n, p):
-    """
-    Optimize a depth-p QAOA for the diagonal cost vector C with COBYLA.
-    Returns (best_params, probabilities, energy_history).
+# Early-stop a restart once it stalls, freeing time for more restarts.
+STALL_PATIENCE = 25      # consecutive evals without a real improvement
+STALL_EPS = 0.01         # what counts as a "real" improvement in energy
 
-    The cost is normalized *inside the phase layer* so a gamma of O(1) produces a
-    meaningful rotation. We scale by the standard deviation of C (its typical
-    spread), NOT its max: the max comes from rare, highly-infeasible states and
-    using it makes the gamma search far too coarse for the states that actually
-    carry amplitude — which leaves the optimizer stuck near the mean cost.
-    Reported energies stay in true units.
+
+class _Stalled(Exception):
+    """Raised inside the objective to abort a stuck COBYLA restart early."""
+
+
+def _num_restarts(n):
+    """Independent random starts; more for small/fast problems."""
+    if n <= 12:
+        return 8
+    if n <= 15:
+        return 6
+    return 2
+
+
+def _interp_params(params):
     """
+    INTERP warm start (Zhou et al.): turn an optimized depth-k point into a
+    depth-(k+1) initial point by linearly interpolating the gamma and beta
+    schedules to one more layer. This makes each depth start from the previous
+    depth's solution, so deeper QAOA reliably improves instead of getting lost in
+    a larger random landscape.
+    """
+    k = len(params) // 2
+    g, b = params[:k], params[k:]
+    x_old = np.linspace(0.0, 1.0, k)
+    x_new = np.linspace(0.0, 1.0, k + 1)
+    return np.concatenate([np.interp(x_new, x_old, g), np.interp(x_new, x_old, b)])
+
+
+def qaoa_optimize(C, n, p, score=None, log=True):
+    """
+    Optimize a depth-p QAOA for the diagonal cost vector C.
+
+    Uses layerwise (INTERP) initialization: optimize p=1 from several random
+    restarts, then warm-start each successive depth from the previous solution
+    plus a couple of random restarts, keeping the best. This is what makes a
+    larger p actually help — random-init COBYLA at p=3 often underperforms p=1.
+
+    COBYLA (derivative-free) is used deliberately: on this exact statevector
+    landscape it reaches lower-conflict distributions than gradient methods
+    (L-BFGS-B/SLSQP with finite differences), which find a marginally lower mean
+    energy but spread probability off the proper colorings — and cost several
+    times more wall-clock.
+
+    The cost is normalized inside the phase layer by std(C) (a global shift/scale
+    is only a global phase), so gamma stays O(1); otherwise the large one-hot
+    penalty makes exp(-i·gamma·C) alias and the landscape looks flat.
+
+    `score(probs) -> float` (optional, higher = better) selects which optimized
+    candidate to *report*: minimizing energy doesn't uniquely maximize proper-
+    coloring mass, so we report the candidate whose measurement distribution most
+    favors proper colorings while still chaining the INTERP warm starts by energy.
+
+    Returns (best_params, probabilities, energy_history, level_energies).
+    """
+    import sys
     from scipy.optimize import minimize
 
     dim = C.shape[0]
     idx = np.arange(dim, dtype=np.int64)
     flips = [idx ^ (1 << j) for j in range(n)]  # X_j permutation per qubit
     psi0 = np.full(dim, 1.0 / np.sqrt(dim), dtype=np.complex128)
-
-    # Normalized cost used only for the phase rotation (a global shift/scale of C
-    # is just a global phase, so probabilities and true energy are unchanged).
     scale = float(C.std()) or 1.0
     neg_i_cn = -1j * C / scale
 
     def statevector(params):
-        gammas = params[:p]
-        betas = params[p:]
+        k = len(params) // 2  # depth is inferred from the parameter count
+        gammas, betas = params[:k], params[k:]
         psi = psi0.copy()
-        for layer in range(p):
-            # Diagonal cost layer (in-place) on the normalized cost.
-            psi *= np.exp(gammas[layer] * neg_i_cn)
-            # Mixer: e^{-iβX_j} on each qubit, in-place to avoid temporaries.
+        for layer in range(k):
+            psi *= np.exp(gammas[layer] * neg_i_cn)  # diagonal cost layer
             cb, sb = np.cos(betas[layer]), -1j * np.sin(betas[layer])
-            for fj in flips:
+            for fj in flips:  # mixer: e^{-iβX_j} per qubit, in-place
                 flipped = psi[fj]
                 flipped *= sb
                 psi *= cb
                 psi += flipped
         return psi
 
-    def make_objective(history):
+    maxiter = _maxiter_for(n)
+
+    def run(x0):
+        """One COBYLA run with early stopping; returns (e, params, history, probs)."""
+        history: list[float] = []
+        st = {"best_e": np.inf, "best_x": x0, "ref": np.inf, "stall": 0}
+
         def objective(params):
             psi = statevector(params)
             energy = float(np.real(np.vdot(psi, C * psi)))
             history.append(energy)
+            if energy < st["best_e"]:
+                st["best_e"], st["best_x"] = energy, params.copy()
+            if energy < st["ref"] - STALL_EPS:  # early stop on a stall
+                st["ref"], st["stall"] = energy, 0
+            else:
+                st["stall"] += 1
+                if st["stall"] >= STALL_PATIENCE:
+                    raise _Stalled()
             return energy
 
-        return objective
+        try:
+            minimize(objective, x0, method="COBYLA",
+                     options={"maxiter": maxiter, "rhobeg": 0.5})
+        except _Stalled:
+            pass
+        # The distribution is only needed when we select candidates by score.
+        probs = np.abs(statevector(st["best_x"])) ** 2 if score else None
+        return st["best_e"], st["best_x"], history, probs
+
+    def reported_key(cand):
+        # Higher proper-coloring mass first, then lower energy.
+        return (score(cand[3]) if score else 0.0, -cand[0])
 
     rng = np.random.default_rng(7)
-    maxiter = _maxiter_for(n)
-    restarts = 5 if n <= 15 else 1
+    level_energies = []
+    best = (np.inf, None, [], None)  # lowest-energy point (drives INTERP chaining)
+    reported = [None]                # candidate we'll actually report
 
-    best_params, best_energy, best_history = None, np.inf, []
-    for _ in range(restarts):
-        # Standard QAOA ranges: gamma in [0, 2π), beta in [0, π).
-        x0 = np.concatenate([
-            rng.uniform(0.0, 2.0 * np.pi, size=p),
-            rng.uniform(0.0, np.pi, size=p),
-        ])
-        history: list[float] = []
-        res = minimize(
-            make_objective(history), x0, method="COBYLA",
-            options={"maxiter": maxiter, "rhobeg": 0.5},
+    def rand_start(k):
+        return np.concatenate([rng.uniform(0, 2 * np.pi, k), rng.uniform(0, np.pi, k)])
+
+    def consider(cand):
+        if reported[0] is None or reported_key(cand) > reported_key(reported[0]):
+            reported[0] = cand
+
+    if n <= 15:
+        # Layerwise INTERP: optimize depth 1, then warm-start each deeper layer.
+        for _ in range(_num_restarts(n)):
+            cand = run(rand_start(1))
+            if cand[0] < best[0]:
+                best = cand
+            consider(cand)
+        level_energies.append(round(best[0], 4))
+
+        for level in range(2, p + 1):
+            starts = [_interp_params(best[1]), rand_start(level), rand_start(level)]
+            lvl_best = (np.inf, None, [], None)
+            for x0 in starts:
+                cand = run(x0)
+                if cand[0] < lvl_best[0]:
+                    lvl_best = cand
+                consider(cand)
+            best = lvl_best
+            level_energies.append(round(lvl_best[0], 4))
+    else:
+        # Large state space: layerwise is too costly; a couple of direct restarts
+        # at depth p. The reported coloring is the exact cost-minimum either way.
+        for _ in range(2):
+            cand = run(rand_start(p))
+            if cand[0] < best[0]:
+                best = cand
+            consider(cand)
+        level_energies.append(round(best[0], 4))
+
+    reported = reported[0]
+    if log:
+        print(
+            f"[qaoa] n={n} p={p} energy-by-depth={level_energies} "
+            f"reported_energy={reported[0]:.4f}",
+            file=sys.stderr,
         )
-        if res.fun < best_energy:
-            best_energy, best_params, best_history = res.fun, res.x, history
 
-    probs = np.abs(statevector(best_params)) ** 2
-    return best_params, probs, best_history
+    final_probs = reported[3]
+    if final_probs is None:
+        final_probs = np.abs(statevector(reported[1])) ** 2
+    return reported[1], final_probs, reported[2], level_energies
 
 
 def collect_samples(probs, n, C):
@@ -323,10 +423,18 @@ def run_local(qp, nodes, edges, num_colors, p):
 
     qubo = QuadraticProgramToQubo(penalty=onehot_penalty(nodes, edges)).convert(qp)
     C, n = build_cost_vector(qubo)
-    _params, probs, energy_history = qaoa_optimize(C, n, p)
+
+    # Report the QAOA candidate whose distribution most favors proper colorings.
+    # Skip this extra scoring above 15 qubits, where it's too costly per candidate.
+    def score(probs):
+        return proper_coloring_mass(probs, nodes, edges, num_colors)
+
+    _params, probs, energy_history, restarts = qaoa_optimize(
+        C, n, p, score=score if n <= 15 else None
+    )
 
     optimal = proper_coloring_mass(probs, nodes, edges, num_colors)
-    return collect_samples(probs, n, C), energy_history, float(optimal)
+    return collect_samples(probs, n, C), energy_history, float(optimal), restarts
 
 
 # --------------------------------------------------------------------------- #
@@ -381,7 +489,7 @@ def run_ibm(qp, nodes, edges, num_colors, p, token):
     qubo = QuadraticProgramToQubo(penalty=onehot_penalty(nodes, edges)).convert(qp)
     C, n = build_cost_vector(qubo)
     operator, _offset = qubo.to_ising()
-    params, _probs, energy_history = qaoa_optimize(C, n, p)
+    params, _probs, energy_history, _restarts = qaoa_optimize(C, n, p)
 
     circuit = build_qaoa_circuit(operator, params, n, p)
     isa = transpile(circuit, backend=backend, optimization_level=1)
@@ -454,21 +562,26 @@ def execute(payload):
                 backend_name, fallback=False,
             )
         except Exception as exc:  # noqa: BLE001 - any failure => graceful fallback
-            samples, energy_history, optimal = run_local(
+            samples, energy_history, optimal, restarts = run_local(
                 qp, nodes, edges, num_colors, p
             )
             res = build_result(
                 samples, nodes, edges, num_colors, energy_history,
                 "local simulator", fallback=True, success_prob=optimal,
             )
+            res["energy_by_depth"] = restarts
             res["note"] = f"IBM run unavailable ({exc}); used local simulator."
             return 200, res
 
-    samples, energy_history, optimal = run_local(qp, nodes, edges, num_colors, p)
-    return 200, build_result(
+    samples, energy_history, optimal, restarts = run_local(
+        qp, nodes, edges, num_colors, p
+    )
+    res = build_result(
         samples, nodes, edges, num_colors, energy_history,
         "local simulator", fallback=False, success_prob=optimal,
     )
+    res["energy_by_depth"] = restarts
+    return 200, res
 
 
 # --------------------------------------------------------------------------- #

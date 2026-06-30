@@ -90,7 +90,7 @@ export const useGraphColoringStore = create<GraphColoringState>((set, get) => ({
   graph: generateRandomGraph(INITIAL_NODES, INITIAL_EDGES),
 
   colors: 3,
-  p: 1,
+  p: 3,
   target: "local",
   ibmToken: "",
   saveToken: false,

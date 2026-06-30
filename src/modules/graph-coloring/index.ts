@@ -17,7 +17,7 @@ export const graphColoringModule: AlgorithmModule = {
   VisualizerComponent: Visualizer,
   defaultParams: {
     colors: 3,
-    p: 1,
+    p: 3,
     target: "local",
   },
   enabled: true,

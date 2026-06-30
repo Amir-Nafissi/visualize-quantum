@@ -125,7 +125,10 @@ toast), so the app never hard-fails on a quantum job.
   and `qiskit-aer` — the local solver is pure NumPy/SciPy, so only
   qiskit-optimization (QUBO) and qiskit-ibm-runtime (hardware) are needed. This
   keeps the bundle well under Vercel's ~250 MB unzipped limit.
+- QAOA depth defaults to **p=3** with layerwise (INTERP) initialization —
+  optimize p=1, then warm-start each deeper layer from the previous solution — so
+  deeper circuits reliably improve. The reported candidate is chosen to maximize
+  proper-coloring probability mass.
 - Keep graphs small: statevector simulation is exponential in `nodes × colors`,
   so the app caps circuits at **18 qubits** and surfaces a clear error beyond
-  that. Typical graphs (≤15 qubits) solve in ~3–6 s (several COBYLA restarts for
-  solution quality); the 18-qubit max takes ~5–8 s.
+  that. Typical graphs (≤15 qubits) solve in ~5–7 s; the 18-qubit max ~11 s.
