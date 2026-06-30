@@ -23,7 +23,6 @@ token, queue longer than the serverless budget) falls back to the local result.
 
 from http.server import BaseHTTPRequestHandler
 import json
-import sys
 import time
 import traceback
 
@@ -150,16 +149,6 @@ def build_result(
         conflict_distribution = [
             {"conflicts": k, "prob": agg[k]} for k in sorted(agg)
         ]
-
-    # Diagnostic: dump the exact top-5 (bits, prob, conflicts) to stderr. stdout
-    # stays clean JSON for the Node route; stderr is surfaced in the dev console.
-    # NOTE: for graph coloring the top states are usually *cost-degenerate*
-    # (every proper coloring has zero conflicts), so QAOA spreads near-equal
-    # probability over them — identical-height bars are expected, not a bug.
-    print("[execute] top bitstrings (bits | prob | conflicts):", file=sys.stderr)
-    for t in scored[:5]:
-        print(f"  {t[0]}  {t[2]:.6e}  conflicts={t[3]}", file=sys.stderr)
-    print(f"[execute] success_prob={float(success_prob):.6e}", file=sys.stderr)
 
     return {
         "coloring": {str(k): v for k, v in coloring.items()},
