@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
-import { AlertTriangle, Cpu, Play, Radio, Square } from "lucide-react";
+import { AlertTriangle, Binary, Cpu, Play, Radio, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
@@ -15,8 +15,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { cn } from "@/lib/utils";
+import { cn, formatMs } from "@/lib/utils";
 import { conflictingEdges, maxCliqueSize } from "./lib";
+import { solveClassical } from "./classical-solver";
 import { useGraphColoringStore, type QaoaResult } from "./store";
 
 const TOKEN_KEY = "vq_ibm_token";
@@ -73,6 +74,36 @@ export function ConfigPanel() {
       toast.error("Add at least 2 nodes before running.");
       return;
     }
+
+    // Classical target: solve synchronously in the browser — instant, no qubit
+    // cap, no network round-trip, and no quantum settle animation.
+    if (target === "classical") {
+      const { coloring, conflicts, algorithm, executionTimeMs } = solveClassical(
+        graph,
+        colors
+      );
+      setError(null);
+      setResult({
+        kind: "classical",
+        coloring,
+        num_colors: colors,
+        algorithm,
+        execution_time_ms: executionTimeMs,
+        backend: "classical solver",
+      });
+      setStatus("done");
+      setRunPhase("revealed"); // skip straight to results; no animation
+      const time = formatMs(executionTimeMs);
+      if (conflicts === 0) {
+        toast.success(`Classical solver: proper coloring in ${time}.`);
+      } else {
+        toast.warning(
+          `Classical solver: ${conflicts} conflicting edge(s) in ${time}.`
+        );
+      }
+      return;
+    }
+
     if (qubits > QUBIT_CAP) {
       toast.error(
         `Too large for the local simulator: ${graph.nodes.length} nodes × ${colors} colors = ${qubits} qubits (max ${QUBIT_CAP}).`
@@ -122,7 +153,7 @@ export function ConfigPanel() {
         );
       }
 
-      const data = (await res.json()) as QaoaResult;
+      const data = { ...((await res.json()) as Omit<QaoaResult, "kind">), kind: "quantum" as const };
       setResult(data);
       setStatus("done");
       // Hand off to the energy-driven settle animation; charts reveal when it
@@ -178,7 +209,12 @@ export function ConfigPanel() {
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-4">
+      <div
+        className={cn(
+          "grid gap-4",
+          target === "classical" ? "grid-cols-1" : "grid-cols-2"
+        )}
+      >
         {/* Number of colors */}
         <div className="space-y-2">
           <Label>Number of colors</Label>
@@ -199,38 +235,46 @@ export function ConfigPanel() {
           </Select>
         </div>
 
-        {/* QAOA depth p */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <Label>QAOA depth p</Label>
-            <span className="font-mono text-sm text-muted-foreground">{p}</span>
+        {/* QAOA depth p — not applicable to the classical solver. */}
+        {target !== "classical" && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>QAOA depth p</Label>
+              <span className="font-mono text-sm text-muted-foreground">{p}</span>
+            </div>
+            <Slider
+              value={[p]}
+              min={1}
+              max={5}
+              step={1}
+              onValueChange={([v]) => setP(v)}
+              className="pt-2"
+            />
           </div>
-          <Slider
-            value={[p]}
-            min={1}
-            max={5}
-            step={1}
-            onValueChange={([v]) => setP(v)}
-            className="pt-2"
-          />
-        </div>
+        )}
       </div>
 
       {/* Execution target toggle */}
       <div className="space-y-2">
         <Label>Execution target</Label>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <TargetButton
             active={target === "local"}
             onClick={() => setTarget("local")}
             icon={<Cpu className="size-4" />}
-            label="Local Simulator"
+            label="Local"
           />
           <TargetButton
             active={target === "ibm"}
             onClick={() => setTarget("ibm")}
             icon={<Radio className="size-4" />}
-            label="IBM Quantum"
+            label="IBM"
+          />
+          <TargetButton
+            active={target === "classical"}
+            onClick={() => setTarget("classical")}
+            icon={<Binary className="size-4" />}
+            label="Classical"
           />
         </div>
       </div>
@@ -269,19 +313,26 @@ export function ConfigPanel() {
         </motion.div>
       )}
 
-      {/* Qubit budget hint */}
-      <div
-        className={cn(
-          "rounded-lg border px-3 py-2 text-xs",
-          qubits > QUBIT_CAP
-            ? "border-destructive/40 bg-destructive/10 text-destructive"
-            : "border-border bg-secondary/40 text-muted-foreground"
-        )}
-      >
-        Circuit size: {graph.nodes.length} nodes × {colors} colors ={" "}
-        <span className="font-mono">{qubits}</span> qubits
-        {qubits > QUBIT_CAP && ` — exceeds local cap of ${QUBIT_CAP}`}
-      </div>
+      {/* Circuit-size hint (quantum) vs. classical solver info. */}
+      {target === "classical" ? (
+        <div className="rounded-lg border border-border bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
+          Uses an exact backtracking solver — instant results (DSatur greedy
+          above 15 nodes). No qubit limit.
+        </div>
+      ) : (
+        <div
+          className={cn(
+            "rounded-lg border px-3 py-2 text-xs",
+            qubits > QUBIT_CAP
+              ? "border-destructive/40 bg-destructive/10 text-destructive"
+              : "border-border bg-secondary/40 text-muted-foreground"
+          )}
+        >
+          Circuit size: {graph.nodes.length} nodes × {colors} colors ={" "}
+          <span className="font-mono">{qubits}</span> qubits
+          {qubits > QUBIT_CAP && ` — exceeds local cap of ${QUBIT_CAP}`}
+        </div>
+      )}
 
       {/* Feasibility warning: chosen colors below the chromatic lower bound. */}
       {infeasible && (

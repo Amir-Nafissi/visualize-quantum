@@ -18,3 +18,11 @@ export function formatPercent(fraction: number): string {
   if (p < 10) return `${p.toFixed(1)}%`;
   return `${Math.round(p)}%`;
 }
+
+/** Format a small millisecond duration readably, e.g. 2.34ms / 15.2ms / 120ms. */
+export function formatMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "0ms";
+  if (ms < 10) return `${ms.toFixed(2)}ms`;
+  if (ms < 100) return `${ms.toFixed(1)}ms`;
+  return `${Math.round(ms)}ms`;
+}

@@ -8,8 +8,9 @@ import {
   type Edge,
   type Graph,
 } from "./lib";
+import type { ClassicalAlgorithm } from "./classical-solver";
 
-export type ExecutionTarget = "local" | "ibm";
+export type ExecutionTarget = "local" | "ibm" | "classical";
 export type RunStatus = "idle" | "running" | "done" | "error";
 
 /**
@@ -32,8 +33,9 @@ export interface ConflictTier {
   prob: number;
 }
 
-/** Shape returned by POST /api/quantum/execute. */
+/** Shape returned by POST /api/quantum/execute (tagged `kind` added client-side). */
 export interface QaoaResult {
+  kind: "quantum";
   coloring: Coloring;
   energy_history: number[];
   success_prob: number;
@@ -43,6 +45,19 @@ export interface QaoaResult {
   fallback?: boolean;
   backend?: string;
 }
+
+/** Result of the in-browser classical solver (non-quantum baseline). */
+export interface ClassicalResult {
+  kind: "classical";
+  coloring: Coloring;
+  num_colors: number;
+  algorithm: ClassicalAlgorithm;
+  execution_time_ms: number;
+  backend: string;
+}
+
+/** Either execution path produces one of these; discriminated by `kind`. */
+export type RunResult = QaoaResult | ClassicalResult;
 
 interface GraphColoringState {
   // Generator slider state
@@ -62,7 +77,7 @@ interface GraphColoringState {
   // Execution state
   status: RunStatus;
   runPhase: RunPhase;
-  result: QaoaResult | null;
+  result: RunResult | null;
   error: string | null;
 
   // --- actions ---
@@ -83,7 +98,7 @@ interface GraphColoringState {
 
   setStatus: (s: RunStatus) => void;
   setRunPhase: (p: RunPhase) => void;
-  setResult: (r: QaoaResult | null) => void;
+  setResult: (r: RunResult | null) => void;
   setError: (e: string | null) => void;
   reset: () => void;
 }

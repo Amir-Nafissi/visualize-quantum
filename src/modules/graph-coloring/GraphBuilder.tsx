@@ -71,7 +71,9 @@ export function GraphBuilder() {
     numColors: result?.num_colors ?? colors,
     runPhase,
     finalColoring: result?.coloring ?? null,
-    energyHistory: result?.energy_history ?? null,
+    // Only quantum runs have an energy history; classical results skip the
+    // settle animation entirely, so null is fine.
+    energyHistory: result?.kind === "quantum" ? result.energy_history : null,
     onSettled: handleSettled,
   });
 
