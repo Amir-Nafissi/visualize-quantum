@@ -72,6 +72,14 @@ highlighted in red.
 Validated end-to-end: a triangle is properly 3-colored (0 conflicts) but never
 2-colored (≥1 conflict); a 4-cycle is properly 2-colored.
 
+The backend also returns, over the **full** measurement distribution, the
+probability mass grouped by conflict count (`conflict_distribution`) — this
+drives the Solution Quality Distribution chart. This is more informative than
+raw bitstring bars: every proper coloring is cost-degenerate (all have zero
+conflicts), so QAOA spreads near-equal probability over them and per-bitstring
+bars come out uniform, whereas the conflict tiers show a clear success-vs-error
+profile.
+
 ## Local development
 
 The Qiskit logic lives in `python/execute.py`. A Next.js route handler
@@ -101,9 +109,16 @@ Then open the dashboard → **Graph Coloring**:
 
 1. Set nodes/edges (edge max auto-updates to `N·(N−1)/2` and clamps down).
 2. **Generate** a random Erdős–Rényi graph, or build one by hand (Add / Connect /
-   Delete / Move modes on the canvas).
-3. Pick colors (2–4), QAOA depth `p` (1–5), and target.
-4. **Run QAOA** → colored graph, energy-convergence chart, top-5 bitstring bars.
+   Delete / Move modes on the canvas). Hand-placed nodes stay pinned where you
+   drop them, positions survive tool switches, and **Center** re-fits the graph
+   in view.
+3. Pick colors (2–4), QAOA depth `p` (1–5), and target. If the chosen color count
+   is below the graph's chromatic lower bound (largest clique) the panel warns
+   that some edges must conflict — e.g. a complete graph on `n` nodes needs `n`
+   colors.
+4. **Run QAOA** → colored graph, energy-convergence chart, and a Solution Quality
+   Distribution chart (probability mass by conflict count; the 0-conflicts
+   success bar is green). A long run can be cancelled with **Stop**.
 
 ## IBM Quantum
 
